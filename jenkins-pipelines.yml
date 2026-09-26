@@ -1,0 +1,76 @@
+pipeline {
+    agent any
+	
+	 environment {
+	    NETLIFY_AUTH_TOKEN = credentials("netlify-personal-access-token")
+        NETLIFY_SITE_ID = 'YOUR SITE ID'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                git branch: 'main', changelog: false, poll: false, url: 'https://github.com/Veverita-Engineering/Customer-Portal'
+            }
+        }
+        stage('Build') {
+            steps {
+                nodejs(nodeJSInstallationName: 'node-lts') {
+                    sh 'node --version'
+                    sh 'npm --version'
+                    sh 'npm install'
+                    sh 'npm run build'
+                }
+            }
+        }
+        stage('Parallel Stage') {
+            failFast true
+            parallel {
+                // parallel stages come here
+                stage('Test') {
+                    steps {
+                        sh 'npm test -- --reporters=jest-junit'
+                    }
+                }
+                stage('SCA') {
+                    steps {
+                        snykSecurity(
+                            snykInstallation: 'snyk@latest',
+                            snykTokenId: 'snyk-api-token',
+                        )
+                    }
+                }
+            }
+        }
+        stage('Deploy Staging') {
+            steps {
+                echo "Deploying to production site ID: ${NETLIFY_SITE_ID}"
+				nodejs(nodeJSInstallationName: 'node-lts') {
+                    sh 'node_modules/.bin/netlify deploy --dir=build'
+                }
+            }
+        }
+        stage('Deploy Prod') {
+            steps {
+                 nodejs(nodeJSInstallationName: 'node-lts') {
+                 echo "Deploying site: ${NETLIFY_SITE_ID}"
+                 sh 'node_modules/.bin/netlify status'
+				 sh 'node_modules/.bin/netlify deploy --dir=build --prod'
+				 
+				// Add your smoke test step right here
+               // The -q flag in grep makes it quiet, but Jenkins will still catch the exit code!
+                 sh 'curl -s https://YOUR-WEBSITE-NAME | grep -q "React App"'
+            }
+        }
+    }
+    post {
+        success {
+            // add post actions here
+            archiveArtifacts artifacts: 'build/**', fingerprint: true
+        }
+    }
+	post {
+        always {
+            junit 'reports/junit.xml'
+        }
+    }
+}
